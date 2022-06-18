@@ -1,0 +1,19 @@
+{
+  "name": "qb_tracker_updater",
+  "version": "1.0.0",
+  "description": "Update qbittorrent trackers with latest ngosang list",
+  "main": "main.js",
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "yargs": "^17.5.1"
+  },
+  "pkg": {
+    "targets": [
+      "node16-macos-arm64",
+      "node16-linux-x64",
+      "node16-linux-arm64"
+    ],
+    "outputPath": "dist"
+  }
+}
