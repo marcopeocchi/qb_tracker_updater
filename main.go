@@ -1,28 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"flag"
-	"io/ioutil"
+	"io"
+	"log"
 	"net/http"
+	"os"
 	"os/exec"
-	"strings"
 )
 
-func main() {
-	_user, err := exec.Command("whoami").Output()
+var (
+	confPath string
+	profile  int
 
-	if err != nil {
-		panic("Error: Cannot infer current user")
-	}
-
-	user := string(_user)
-
-	configPath := flag.String("conf", "/home/"+user[0:len(user)-1]+"/.config/qBittorrent/qBittorrent.conf", "qBittorrent config path")
-	profile := flag.Int("profile", 2, "select profile level:\n 1: best\n 2: best_ip\n 3: all_udp\n 4: all_http\n 5: all_https\n 6: all_ws\n 7: all_ip\n")
-
-	flag.Parse()
-
-	profiles := [7]string{
+	profiles = []string{
 		"https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt",
 		"https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best_ip.txt",
 		"https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all_udp.txt",
@@ -31,50 +23,106 @@ func main() {
 		"https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all_ws.txt",
 		"https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all_ip.txt",
 	}
+)
 
-	res, err := http.Get(profiles[*profile-1])
+func currentUser() (string, error) {
+	user, err := exec.Command("whoami").Output()
 	if err != nil {
-		panic("Network error: Cannot retrieve trackers from Github")
+		return "", err
 	}
-	body, err := ioutil.ReadAll(res.Body)
+
+	return string(bytes.TrimRight(user, "\n")), nil
+}
+
+func getGithubResponse() ([]byte, error) {
+	res, err := http.Get(profiles[profile-1])
 	if err != nil {
-		panic("Network error: Cannot parse response")
+		return nil, err
 	}
 
-	trackers := strings.Split(string(body), "\n")
+	defer res.Body.Close()
 
-	acc := 0
-	for _, line := range trackers {
-		if len(line) != 0 {
-			trackers[acc] = line
-			acc++
-		}
-	}
-
-	trackers = trackers[:acc]
-
-	list := reduce(trackers, func(prev, curr string) string {
-		return prev + "\\n" + curr
-	}, "")
-
-	list = list[2:]
-
-	content, err := ioutil.ReadFile(*configPath)
-
+	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		panic("IO Error: Config file not found")
+		return nil, err
 	}
 
-	buff := ""
+	return body, nil
+}
 
-	for _, line := range strings.Split(string(content), "\n") {
-		if strings.Contains(line, "Bittorrent\\TrackersList") {
-			config := strings.Split(line, "=")
-			config[1] = list
-			line = config[0] + "=" + config[1]
-		}
-		buff += (line + "\n")
+func parseGithubResponse(b []byte) []byte {
+	var buf bytes.Buffer
+
+	b = bytes.ReplaceAll(b, []byte("\n\n"), []byte("\n"))
+	bb := bytes.Split(b, []byte("\n"))
+
+	for _, line := range bb[:len(bb)-1] {
+		buf.WriteString(string(line))
+		buf.WriteString("\\n")
 	}
 
-	ioutil.WriteFile(*configPath, []byte(buff), 0)
+	buf.Truncate(buf.Len() - 2)
+	return buf.Bytes()
+}
+
+func main() {
+	user, err := currentUser()
+	if err != nil {
+		log.Fatalln("cannot infer current user", err.Error())
+	}
+
+	flag.StringVar(
+		&confPath,
+		"conf",
+		"/home/"+user[0:len(user)-1]+"/.config/qBittorrent/qBittorrent.conf",
+		"qBittorrent config path",
+	)
+	flag.IntVar(
+		&profile,
+		"profile",
+		2,
+		"select profile level:\n 1: best\n 2: best_ip\n 3: all_udp\n 4: all_http\n 5: all_https\n 6: all_ws\n 7: all_ip\n",
+	)
+	flag.Parse()
+
+	ghResponse, err := getGithubResponse()
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	fd, err := os.Open(confPath)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	configContent, err := io.ReadAll(fd)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	sep := []byte("Bittorrent\\TrackersList=")
+
+	if !bytes.Contains(configContent, sep) {
+		log.Fatalln("failed to update trackers")
+	}
+
+	var (
+		lineSep   = []byte("/announce")
+		fromIndex = bytes.Index(configContent, sep)
+		toIndex   = bytes.LastIndex(configContent, lineSep)
+		cut       = configContent[fromIndex : toIndex+len(lineSep)]
+	)
+
+	modified := bytes.Replace(
+		configContent,
+		cut,
+		append(sep, parseGithubResponse(ghResponse)...),
+		1,
+	)
+
+	if err := os.WriteFile(confPath, modified, os.ModePerm); err != nil {
+		log.Fatalln(err)
+	}
+
+	log.Println("updated trackers")
 }
