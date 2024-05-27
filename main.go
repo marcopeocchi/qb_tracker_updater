@@ -57,8 +57,8 @@ func parseGithubResponse(b []byte) []byte {
 	bb := bytes.Split(b, []byte("\n"))
 
 	for _, line := range bb[:len(bb)-1] {
-		buf.WriteString(string(line))
-		buf.WriteString("\\n")
+		buf.Write(line)
+		buf.WriteRune('\n')
 	}
 
 	buf.Truncate(buf.Len() - 2)
